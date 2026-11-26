@@ -1141,7 +1141,7 @@ namespace MenuStudio
         static bool IsWidgetProc(string n)
         {
             n = n.ToLowerInvariant();
-            return n == "rainmeter" || n == "desktopwidgets" || n == "clockstudio" || n == "menustudio" || n.Contains("lively") || n.Contains("wallpaper") || n.Contains("nowbar") || n.Contains("widget") || n.Contains("yasb") || n.Contains("conky");
+            return n == "rainmeter" || n == "desktopwidgets" || n == "clockstudio" || n.Contains("lively") || n.Contains("wallpaper") || n.Contains("nowbar") || n.Contains("widget") || n.Contains("yasb") || n.Contains("conky");
         }
         static IntPtr DesktopList()
         {

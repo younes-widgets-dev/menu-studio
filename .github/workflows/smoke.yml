@@ -41,16 +41,32 @@ jobs:
           $p = Start-Process out\MenuStudio.exe -PassThru
           Start-Sleep -Seconds 10
           Shot s1_start
+          (New-Object -ComObject Shell.Application).MinimizeAll()
+          Start-Sleep -Seconds 3
+          Shot s1b_desktop
           Write-Host "alive after 10s:" (-not $p.HasExited)
-          RClick 500 350
+          RClick 500 200
           Start-Sleep -Seconds 2
           Shot s2_rightclick
-          LClick 560 440
+          [M]::SetCursorPos(560, 252)
           Start-Sleep -Seconds 1
-          Shot s3_click_item2
-          LClick 700 350
+          Shot s3_hover_new
+          LClick 560 252
           Start-Sleep -Seconds 1
-          Shot s4_after
+          Shot s3b_click_new
+          LClick 560 297
+          Start-Sleep -Seconds 2
+          Shot s4_after_toggle_icons
+          RClick 40 50
+          Start-Sleep -Seconds 3
+          Shot s5_icon_rightclick
+          LClick 900 600
+          Start-Sleep -Seconds 1
+          RClick 500 200
+          Start-Sleep -Seconds 2
+          LClick 560 297
+          Start-Sleep -Seconds 2
+          Shot s6_icons_back
           Start-Sleep -Seconds 2
           Write-Host "alive at end:" (-not $p.HasExited)
           foreach ($f in Get-ChildItem "$env:APPDATA\MenuStudio" -Filter *.log -ErrorAction SilentlyContinue) { Write-Host "=== $($f.Name)"; Get-Content $f.FullName }
