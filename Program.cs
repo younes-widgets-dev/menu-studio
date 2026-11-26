@@ -598,7 +598,7 @@ namespace MenuStudio
             else { if (list == null) list = Spec.Build(); f = new MenuForm(list, parent); }
             int ox = sub ? 0 : Cfg.I("offx"), oy = sub ? 0 : Cfg.I("offy");
             int x = pt.X + ox - f.M, y = pt.Y + oy - f.M;
-            if (Cfg.B("flip"))
+            if (true)
             {
                 Rectangle wa = Screen.FromPoint(pt).WorkingArea;
                 if (x + f.M + f.W > wa.Right) x = sub && parent != null ? parent.MenuRect.Left - f.W - f.M + 4 : pt.X - f.W - f.M;
@@ -922,9 +922,49 @@ namespace MenuStudio
                 if (c == "Progman" || c == "WorkerW" || c == "SHELLDLL_DefView") return 1;
                 if (c == "SysListView32" && (pc == "SHELLDLL_DefView" || pc == "")) return 2;
                 if (c == "SysListView32") { IntPtr pp = GetParent(p); if (pp != IntPtr.Zero) { string ppc = Cls(pp); if (ppc == "Progman" || ppc == "WorkerW") return 2; } }
+                // a widget / skin window lying on the desktop (Rainmeter, our own widgets, ...): look through it
+                IntPtr root = GetAncestor(w, 2); if (root == IntPtr.Zero) root = w;
+                string rc = Cls(root); string pn = ProcName(root);
+                LastInfo = c + " in " + pn + (rc != c ? " [" + rc + "]" : "");
+                if (rc.StartsWith("RainmeterMeterWindow") || IsWidgetProc(pn))
+                {
+                    IntPtr lv = DesktopList(); if (lv != IntPtr.Zero) { lastLV = lv; return 2; }
+                }
                 return 0;
             }
             catch { return 0; }
+        }
+        [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint f);
+        static Dictionary<uint, string> pnCache = new Dictionary<uint, string>();
+        static string ProcName(IntPtr h)
+        {
+            try
+            {
+                uint pid; Native.GetWindowThreadProcessId(h, out pid); string n;
+                if (pnCache.TryGetValue(pid, out n)) return n;
+                n = Process.GetProcessById((int)pid).ProcessName; pnCache[pid] = n; return n;
+            }
+            catch { return "?"; }
+        }
+        static bool IsWidgetProc(string n)
+        {
+            n = n.ToLowerInvariant();
+            return n == "rainmeter" || n == "desktopwidgets" || n == "clockstudio" || n == "menustudio" || n.Contains("lively") || n.Contains("wallpaper") || n.Contains("nowbar") || n.Contains("widget") || n.Contains("yasb") || n.Contains("conky");
+        }
+        static IntPtr DesktopList()
+        {
+            IntPtr pm = Native.FindWindow("Progman", null);
+            IntPtr dv = pm != IntPtr.Zero ? Native.FindWindowEx(pm, IntPtr.Zero, "SHELLDLL_DefView", null) : IntPtr.Zero;
+            if (dv == IntPtr.Zero)
+            {
+                IntPtr ww = IntPtr.Zero;
+                for (int i = 0; i < 20; i++)
+                {
+                    ww = Native.FindWindowEx(IntPtr.Zero, ww, "WorkerW", null); if (ww == IntPtr.Zero) break;
+                    dv = Native.FindWindowEx(ww, IntPtr.Zero, "SHELLDLL_DefView", null); if (dv != IntPtr.Zero) break;
+                }
+            }
+            return dv == IntPtr.Zero ? IntPtr.Zero : Native.FindWindowEx(dv, IntPtr.Zero, "SysListView32", null);
         }
         static bool OnIcon(Native.PT pt)
         {
