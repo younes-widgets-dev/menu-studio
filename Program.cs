@@ -38,6 +38,7 @@ namespace MenuStudio
         }
         public static void Save()
         {
+            MenuForm.Stale = true; Hook.shiftNative = Cfg.B("shiftnative"); Hook.Post(MenuForm.Prewarm);
             try
             {
                 Directory.CreateDirectory(Dir);
@@ -499,6 +500,7 @@ namespace MenuStudio
         public static List<MenuForm> Open = new List<MenuForm>();
         List<Entry> items; MenuForm parent, child; int hover = -1, kbd = -1; int M;
         float hx, hy, hw, hh, ha; bool hInit;
+        Font cFont, cIcon; Bitmap bgCache; public static MenuForm Pre; public static bool Stale = true;
         Stopwatch sw = Stopwatch.StartNew(); Timer tm = new Timer(); Timer subT = new Timer();
         bool closing; long closeStart; int closeKind;
         SizeF box; int W, Hh;
@@ -528,9 +530,26 @@ namespace MenuStudio
         {
             foreach (MenuForm m in new List<MenuForm>(Open)) m.BeginClose();
         }
+        public static void Prewarm()
+        {
+            try
+            {
+                if (Open.Count > 0 || (Pre != null && !Stale)) return;
+                MenuForm old = Pre; Pre = null; if (old != null) old.Dispose();
+                Stale = false;
+                MenuForm f = new MenuForm(Spec.Build(), null);
+                IntPtr h = f.Handle; f.UpdateBlur();
+                using (Bitmap b = new Bitmap(f.ClientSize.Width, f.ClientSize.Height, PixelFormat.Format32bppPArgb))
+                using (Graphics g = Graphics.FromImage(b)) { g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit; f.Paint(g, 100000); }
+                Pre = f;
+            }
+            catch { Pre = null; }
+        }
         public static void ShowAt(List<Entry> list, Point pt, MenuForm parent, bool sub)
         {
-            MenuForm f = new MenuForm(list, parent);
+            bool fromPre = false; MenuForm f;
+            if (!sub && parent == null && list == null && Pre != null && !Stale) { f = Pre; Pre = null; fromPre = true; }
+            else { if (list == null) list = Spec.Build(); f = new MenuForm(list, parent); }
             int ox = sub ? 0 : Cfg.I("offx"), oy = sub ? 0 : Cfg.I("offy");
             int x = pt.X + ox - f.M, y = pt.Y + oy - f.M;
             if (Cfg.B("flip"))
@@ -542,7 +561,7 @@ namespace MenuStudio
                 if (y + f.M < wa.Top) y = wa.Top - f.M;
             }
             f.Location = new Point(x, y);
-            Open.Add(f); f.Show(); f.UpdateBlur(); f.sw.Restart(); f.tm.Start(); f.Step();
+            Open.Add(f); f.Show(); if (!fromPre) f.UpdateBlur(); f.sw.Restart(); f.tm.Start(); f.Step();
             Hook.KeysOn(Cfg.B("keys"));
         }
         void UpdateBlur()
@@ -561,7 +580,8 @@ namespace MenuStudio
         void Kill()
         {
             tm.Stop(); subT.Stop(); Open.Remove(this); if (Open.Count == 0) Hook.KeysOn(false);
-            try { Hide(); Dispose(); } catch { }
+            try { Hide(); Dispose(); if (bgCache != null) bgCache.Dispose(); } catch { }
+            if (Open.Count == 0) Hook.Post(Prewarm);
         }
 
         public static float Ease(int type, float t)
@@ -636,6 +656,20 @@ namespace MenuStudio
         {
             int rad = Cfg.I("radius"), shape = Cfg.I("shape"), mode = Cfg.I("bgmode"); RectangleF mr = new RectangleF(M, M, W, Hh);
             int S = Cfg.I("shadow");
+            if (bgCache == null)
+            {
+                bgCache = new Bitmap(ClientSize.Width, ClientSize.Height, PixelFormat.Format32bppPArgb);
+                using (Graphics bg0 = Graphics.FromImage(bgCache))
+                {
+                    bg0.SmoothingMode = SmoothingMode.AntiAlias; bg0.PixelOffsetMode = PixelOffsetMode.HighQuality; bg0.Clear(Color.Transparent);
+                    PaintBack(bg0, rad, shape, mode, mr, S);
+                }
+            }
+            g.DrawImageUnscaled(bgCache, 0, 0);
+            PaintFront(g, ms, mr);
+        }
+        void PaintBack(Graphics g, int rad, int shape, int mode, RectangleF mr, int S)
+        {
             if (S > 0)
             {
                 Color sc = Cfg.C("shadowc"); int sa = Cfg.I("shadowa");
@@ -663,6 +697,9 @@ namespace MenuStudio
                     using (Pen pen = new Pen(Color.FromArgb(Cfg.I("bordera"), Cfg.C("border")), bw)) { pen.LineJoin = LineJoin.Round; g.DrawPath(pen, bp); }
                 }
             }
+        }
+        void PaintFront(Graphics g, long ms, RectangleF mr)
+        {
             // highlight
             int hs = Cfg.I("hoverstyle"); int hr = Cfg.I("hoverradius"); Color hc = Cfg.C("hover"), ac = Cfg.C("accent");
             float inset = 4;
@@ -686,9 +723,9 @@ namespace MenuStudio
             // items
             string ff = Cfg.S("font"); FontStyle fs = FontStyle.Regular; if (Cfg.B("bold")) fs |= FontStyle.Bold; if (Cfg.B("italic")) fs |= FontStyle.Italic;
             string icf = Cfg.I("iconfont") == 0 ? "Segoe Fluent Icons" : "Segoe MDL2 Assets";
-            Font font = null, ifont = null;
-            try { font = new Font(ff, Cfg.I("fsize"), fs, GraphicsUnit.Pixel); } catch { font = new Font("Segoe UI", Cfg.I("fsize"), fs, GraphicsUnit.Pixel); }
-            try { ifont = new Font(icf, Cfg.I("isize"), FontStyle.Regular, GraphicsUnit.Pixel); } catch { ifont = new Font("Segoe MDL2 Assets", Cfg.I("isize"), FontStyle.Regular, GraphicsUnit.Pixel); }
+            if (cFont == null) { try { cFont = new Font(ff, Cfg.I("fsize"), fs, GraphicsUnit.Pixel); } catch { cFont = new Font("Segoe UI", Cfg.I("fsize"), fs, GraphicsUnit.Pixel); } }
+            if (cIcon == null) { try { cIcon = new Font(icf, Cfg.I("isize"), FontStyle.Regular, GraphicsUnit.Pixel); } catch { cIcon = new Font("Segoe MDL2 Assets", Cfg.I("isize"), FontStyle.Regular, GraphicsUnit.Pixel); } }
+            Font font = cFont, ifont = cIcon;
             int stag = Cfg.I("stagger"), smode = Cfg.I("staggermode"), padx = Cfg.I("padx"); bool icons = Cfg.B("showicons"); int ta = Cfg.I("textalign"), cs = Cfg.I("case");
             Color tc = Cfg.C("text"), htc = Cfg.C("hovertext"), dc = Cfg.C("dim"), icc = Cfg.C("iconc");
             StringFormat sf = new StringFormat(StringFormat.GenericTypographic); sf.LineAlignment = StringAlignment.Center; sf.FormatFlags |= StringFormatFlags.NoWrap; sf.Trimming = StringTrimming.EllipsisCharacter;
@@ -723,7 +760,6 @@ namespace MenuStudio
                 if (en.Kids != null)
                     using (SolidBrush b = new SolidBrush(Color.FromArgb((int)(255 * ia), dc))) g.DrawString("\uE76C", ifont, b, new RectangleF(r.Right - padx - 18 + ox, y0, 20, r.Height), gf);
             }
-            font.Dispose(); ifont.Dispose();
         }
 
         // ---- interaction ----
@@ -804,7 +840,7 @@ namespace MenuStudio
         [DllImport("oleacc.dll")] static extern int AccessibleObjectFromPoint(Native.PT p, [MarshalAs(UnmanagedType.IUnknown)] out object acc, out object child);
 
         static HookProc mouseProc = MouseCb, keyProc = KeyCb; static IntPtr mh = IntPtr.Zero, kh = IntPtr.Zero;
-        public static bool Bypass, Enabled = true; static bool swallowUp; static Control sync;
+        public static bool shiftNative = true; public static bool Bypass, Enabled = true; static bool swallowUp; static Control sync;
         static HashSet<uint> swallowedKeys = new HashSet<uint>();
 
         public static void Install(Control syncCtl)
@@ -825,24 +861,35 @@ namespace MenuStudio
         public static void Post(Action a) { try { sync.BeginInvoke(a); } catch { } }
 
         static string Cls(IntPtr h) { StringBuilder sb = new StringBuilder(64); GetClassName(h, sb, 64); return sb.ToString(); }
-        static bool EmptyDesktop(Native.PT pt)
+        // 0 = not desktop, 1 = empty desktop, 2 = desktop list view (needs icon hit test)
+        static int Quick(Native.PT pt)
         {
             try
             {
-                IntPtr w = WindowFromPoint(pt); if (w == IntPtr.Zero) return false;
+                IntPtr w = WindowFromPoint(pt); if (w == IntPtr.Zero) return 0;
                 string c = Cls(w);
-                if (c == "SysListView32")
-                {
-                    IntPtr p = GetParent(w); if (p == IntPtr.Zero || Cls(p) != "SHELLDLL_DefView") return false;
-                    object acc, child;
-                    if (AccessibleObjectFromPoint(pt, out acc, out child) != 0 || acc == null) return false;
-                    int cid = 0; try { cid = Convert.ToInt32(child); } catch { return false; }
-                    return cid == 0;
-                }
-                if (c == "Progman" || c == "WorkerW") return true;
-                return false;
+                if (c == "Progman" || c == "WorkerW") return 1;
+                if (c == "SysListView32") { IntPtr p = GetParent(w); if (p != IntPtr.Zero && Cls(p) == "SHELLDLL_DefView") return 2; }
+                return 0;
             }
-            catch { return false; }
+            catch { return 0; }
+        }
+        static bool OnIcon(Native.PT pt)
+        {
+            try
+            {
+                object acc, child;
+                if (AccessibleObjectFromPoint(pt, out acc, out child) != 0 || acc == null) return false;
+                int cid = 0; try { cid = Convert.ToInt32(child); } catch { return true; }
+                return cid != 0;
+            }
+            catch { return true; }
+        }
+        static void Replay()
+        {
+            Bypass = true;
+            Native.mouse_event(0x08, 0, 0, 0, UIntPtr.Zero); Native.mouse_event(0x10, 0, 0, 0, UIntPtr.Zero);
+            Bypass = false;
         }
         static IntPtr MouseCb(int n, IntPtr w, IntPtr l)
         {
@@ -850,22 +897,34 @@ namespace MenuStudio
             {
                 if (n >= 0)
                 {
-                    int msg = (int)w; MSLL ms = (MSLL)Marshal.PtrToStructure(l, typeof(MSLL));
-                    bool inj = (ms.flags & 1) != 0;
+                    int msg = (int)w;
+                    if (msg != 0x204 && msg != 0x205 && !(MenuForm.AnyOpen && (msg == 0x201 || msg == 0x207))) return CallNextHookEx(mh, n, w, l);
+                    int mx = Marshal.ReadInt32(l, 0), my = Marshal.ReadInt32(l, 4), flags = Marshal.ReadInt32(l, 12);
+                    bool inj = (flags & 1) != 0;
                     if (!inj && !Bypass)
                     {
                         if (MenuForm.AnyOpen && (msg == 0x201 || msg == 0x204 || msg == 0x207))
                         {
-                            Point p = new Point(ms.x, ms.y);
+                            Point p = new Point(mx, my);
                             if (!MenuForm.Contains(p)) Post(MenuForm.CloseAll);
                         }
                         if (msg == 0x204 && Enabled && !MenuForm.AnyOpen)
                         {
                             bool shift = (GetKeyState(0x10) & 0x8000) != 0;
-                            if (!(shift && Cfg.B("shiftnative")))
+                            if (!(shift && shiftNative))
                             {
-                                Native.PT pt = new Native.PT(); pt.x = ms.x; pt.y = ms.y;
-                                if (EmptyDesktop(pt)) { swallowUp = true; Point pp = new Point(ms.x, ms.y); Post(delegate { MenuForm.ShowAt(Spec.Build(), pp, null, false); }); return (IntPtr)1; }
+                                Native.PT pt = new Native.PT(); pt.x = mx; pt.y = my;
+                                int q = Quick(pt); Point pp = new Point(mx, my);
+                                if (q == 1) { swallowUp = true; Post(delegate { MenuForm.ShowAt(null, pp, null, false); }); return (IntPtr)1; }
+                                if (q == 2)
+                                {
+                                    swallowUp = true;
+                                    System.Threading.ThreadPool.QueueUserWorkItem(delegate
+                                    {
+                                        if (OnIcon(pt)) Post(Replay); else Post(delegate { MenuForm.ShowAt(null, pp, null, false); });
+                                    });
+                                    return (IntPtr)1;
+                                }
                             }
                         }
                         else if (msg == 0x205 && swallowUp) { swallowUp = false; return (IntPtr)1; }
@@ -1018,7 +1077,7 @@ namespace MenuStudio
             bool first = !Settings.GetBool("autostart_init", false);
             if (first) { SetAutostart(true); Settings.Set("autostart_init", true); Settings.Save(); } else if (IsAutostart()) SetAutostart(true);
             sync = new Control(); sync.CreateControl(); IntPtr h = sync.Handle;
-            Hook.Enabled = Cfg.B("enable"); Hook.Install(sync);
+            Hook.Enabled = Cfg.B("enable"); Hook.shiftNative = Cfg.B("shiftnative"); Hook.Install(sync); MenuForm.Stale = true; Hook.Post(MenuForm.Prewarm);
             tray = new NotifyIcon(); tray.Icon = SystemIcons.Application; tray.Text = "Menu Studio"; tray.Visible = true;
             ContextMenuStrip m = new ContextMenuStrip();
             m.Items.Add("Customize menu...", null, delegate { SettingsForm.ShowIt(); });
