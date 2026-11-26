@@ -35,7 +35,7 @@ namespace MenuStudio
     // ================= Settings =================
     static class Settings
     {
-        static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MenuStudio");
+        static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MenuStudio"); public static string DirPath { get { Directory.CreateDirectory(Dir); return Dir; } }
         static readonly string FilePath = Path.Combine(Dir, "settings.ini");
         static Dictionary<string, string> d = new Dictionary<string, string>();
         public static string NotesPath(string id) { return Path.Combine(Dir, id == "notes" ? "notes.txt" : "notes-" + id + ".txt"); }
@@ -118,6 +118,34 @@ namespace MenuStudio
         [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
         [DllImport("shell32.dll")] public static extern void SHChangeNotify(int evt, uint flags, IntPtr a, IntPtr b);
         [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+        [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref PT p);
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint acc, bool inh, uint pid);
+        [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+        [DllImport("kernel32.dll")] public static extern IntPtr VirtualAllocEx(IntPtr p, IntPtr addr, UIntPtr size, uint type, uint prot);
+        [DllImport("kernel32.dll")] public static extern bool VirtualFreeEx(IntPtr p, IntPtr addr, UIntPtr size, uint type);
+        [DllImport("kernel32.dll")] public static extern bool WriteProcessMemory(IntPtr p, IntPtr addr, byte[] buf, int size, out IntPtr w);
+        [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr p, IntPtr addr, byte[] buf, int size, out IntPtr r);
+        // returns 1 = item under point, 0 = empty, -1 = unknown
+        public static int ListHit(IntPtr lv, int sx, int sy)
+        {
+            IntPtr proc = IntPtr.Zero, mem = IntPtr.Zero;
+            try
+            {
+                uint pid; GetWindowThreadProcessId(lv, out pid); if (pid == 0) return -1;
+                proc = OpenProcess(0x0008 | 0x0010 | 0x0020 | 0x0400, false, pid); if (proc == IntPtr.Zero) return -1;
+                mem = VirtualAllocEx(proc, IntPtr.Zero, (UIntPtr)64, 0x3000, 4); if (mem == IntPtr.Zero) return -1;
+                PT pt = new PT(); pt.x = sx; pt.y = sy; if (!ScreenToClient(lv, ref pt)) return -1;
+                byte[] b = new byte[24]; BitConverter.GetBytes(pt.x).CopyTo(b, 0); BitConverter.GetBytes(pt.y).CopyTo(b, 4); BitConverter.GetBytes(-1).CopyTo(b, 16);
+                IntPtr n; if (!WriteProcessMemory(proc, mem, b, 24, out n)) return -1;
+                SendMessage(lv, 0x1012, (IntPtr)(-1), mem);
+                byte[] r = new byte[24]; if (!ReadProcessMemory(proc, mem, r, 24, out n)) return -1;
+                int item = BitConverter.ToInt32(r, 12);
+                return item >= 0 ? 1 : 0;
+            }
+            catch { return -1; }
+            finally { if (mem != IntPtr.Zero) VirtualFreeEx(proc, mem, UIntPtr.Zero, 0x8000); if (proc != IntPtr.Zero) CloseHandle(proc); }
+        }
         public static void Present(Form f, Bitmap bmp, byte alpha)
         {
             IntPtr scr = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(scr), hb = IntPtr.Zero, old = IntPtr.Zero;
@@ -847,7 +875,7 @@ namespace MenuStudio
         delegate IntPtr HookProc(int n, IntPtr w, IntPtr l);
         [StructLayout(LayoutKind.Sequential)] struct MSLL { public int x, y; public uint data, flags, time; public IntPtr extra; }
         [StructLayout(LayoutKind.Sequential)] struct KBLL { public uint vk, scan, flags, time; public IntPtr extra; }
-        [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc cb, IntPtr mod, uint tid);
+        [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetWindowsHookEx(int id, HookProc cb, IntPtr mod, uint tid);
         [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
         [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
         [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string n);
@@ -858,13 +886,16 @@ namespace MenuStudio
         [DllImport("oleacc.dll")] static extern int AccessibleObjectFromPoint(Native.PT p, [MarshalAs(UnmanagedType.IUnknown)] out object acc, out object child);
 
         static HookProc mouseProc = MouseCb, keyProc = KeyCb; static IntPtr mh = IntPtr.Zero, kh = IntPtr.Zero;
+        public static string LastInfo = "(no right-click yet)", LastDecision = ""; public static int Clicks, Replaced; public static int InstallErr; static IntPtr lastLV; public static bool Installed { get { return mh != IntPtr.Zero; } }
         public static bool shiftNative = true; public static bool Bypass, Enabled = true; static bool swallowUp; static Control sync;
         static HashSet<uint> swallowedKeys = new HashSet<uint>();
 
         public static void Install(Control syncCtl)
         {
             sync = syncCtl;
-            mh = SetWindowsHookEx(14, mouseProc, GetModuleHandle(null), 0);
+            IntPtr mod = IntPtr.Zero; try { mod = GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName); } catch { }
+            mh = SetWindowsHookEx(14, mouseProc, mod, 0);
+            if (mh == IntPtr.Zero) { InstallErr = Marshal.GetLastWin32Error(); mh = SetWindowsHookEx(14, mouseProc, IntPtr.Zero, 0); if (mh == IntPtr.Zero) InstallErr = Marshal.GetLastWin32Error(); }
         }
         public static void Remove()
         {
@@ -884,10 +915,13 @@ namespace MenuStudio
         {
             try
             {
-                IntPtr w = WindowFromPoint(pt); if (w == IntPtr.Zero) return 0;
-                string c = Cls(w);
-                if (c == "Progman" || c == "WorkerW") return 1;
-                if (c == "SysListView32") { IntPtr p = GetParent(w); if (p != IntPtr.Zero && Cls(p) == "SHELLDLL_DefView") return 2; }
+                IntPtr w = WindowFromPoint(pt); if (w == IntPtr.Zero) { LastInfo = "no window"; return 0; }
+                string c = Cls(w); string pc = ""; IntPtr p = GetParent(w); if (p != IntPtr.Zero) pc = Cls(p);
+                LastInfo = c + (pc != "" ? " (parent " + pc + ")" : "");
+                lastLV = w;
+                if (c == "Progman" || c == "WorkerW" || c == "SHELLDLL_DefView") return 1;
+                if (c == "SysListView32" && (pc == "SHELLDLL_DefView" || pc == "")) return 2;
+                if (c == "SysListView32") { IntPtr pp = GetParent(p); if (pp != IntPtr.Zero) { string ppc = Cls(pp); if (ppc == "Progman" || ppc == "WorkerW") return 2; } }
                 return 0;
             }
             catch { return 0; }
@@ -896,12 +930,13 @@ namespace MenuStudio
         {
             try
             {
+                int lh = Native.ListHit(lastLV, pt.x, pt.y); if (lh >= 0) return lh == 1;
                 object acc, child;
                 if (AccessibleObjectFromPoint(pt, out acc, out child) != 0 || acc == null) return false;
-                int cid = 0; try { cid = Convert.ToInt32(child); } catch { return true; }
+                int cid = 0; try { cid = Convert.ToInt32(child); } catch { return false; }
                 return cid != 0;
             }
-            catch { return true; }
+            catch { return false; }
         }
         static void Replay()
         {
@@ -932,14 +967,14 @@ namespace MenuStudio
                             if (!(shift && shiftNative))
                             {
                                 Native.PT pt = new Native.PT(); pt.x = mx; pt.y = my;
-                                int q = Quick(pt); Point pp = new Point(mx, my);
-                                if (q == 1) { swallowUp = true; Post(delegate { MenuForm.ShowAt(null, pp, null, false); }); return (IntPtr)1; }
+                                int q = Quick(pt); Point pp = new Point(mx, my); Clicks++; LastDecision = q == 1 ? "replaced (empty desktop)" : (q == 2 ? "desktop list, checking icon" : "not desktop: native menu");
+                                if (q == 1) { swallowUp = true; Replaced++; Post(delegate { MenuForm.ShowAt(null, pp, null, false); }); return (IntPtr)1; }
                                 if (q == 2)
                                 {
                                     swallowUp = true;
                                     System.Threading.ThreadPool.QueueUserWorkItem(delegate
                                     {
-                                        if (OnIcon(pt)) Post(Replay); else Post(delegate { MenuForm.ShowAt(null, pp, null, false); });
+                                        if (OnIcon(pt)) { LastDecision = "on icon: native menu"; Post(Replay); } else Post(delegate { MenuForm.ShowAt(null, pp, null, false); });
                                     });
                                     return (IntPtr)1;
                                 }
@@ -986,7 +1021,7 @@ namespace MenuStudio
         void Build()
         {
             building = true; SuspendLayout(); Controls.Clear();
-            Panel top = new Panel(); top.Dock = DockStyle.Top; top.Height = 74;
+            Panel top = new Panel(); top.Dock = DockStyle.Top; top.Height = 126;
             Label l1 = new Label(); l1.Text = "Theme:"; l1.Left = 8; l1.Top = 12; l1.AutoSize = true; top.Controls.Add(l1);
             ComboBox th = new ComboBox(); th.DropDownStyle = ComboBoxStyle.DropDownList; th.Left = 60; th.Top = 8; th.Width = 200;
             foreach (string t in Cfg.Themes) th.Items.Add(t.Split('|')[0]);
@@ -999,6 +1034,13 @@ namespace MenuStudio
             rs.Click += delegate { if (MessageBox.Show("Reset all menu options and items to defaults?", "Menu Studio", MessageBoxButtons.YesNo) == DialogResult.Yes) { Settings.RemovePrefix("p."); Settings.Set("menu", ""); Settings.Save(); Build(); } };
             top.Controls.Add(rs);
             Label hint = new Label(); hint.Text = "Tip: hold Shift while right-clicking the desktop to open the normal Windows menu."; hint.Left = 8; hint.Top = 44; hint.AutoSize = true; top.Controls.Add(hint);
+            Label st = new Label(); st.Left = 8; st.Top = 66; st.Width = 560; st.Height = 34; top.Controls.Add(st);
+            Button ol = new Button(); ol.Text = "Open error.log"; ol.Left = 8; ol.Top = 96; ol.Width = 140; ol.Height = 26;
+            ol.Click += delegate { try { string f = Path.Combine(Settings.DirPath, "error.log"); if (!File.Exists(f)) File.WriteAllText(f, "(no errors logged)\r\n"); Process.Start("notepad.exe", "\"" + f + "\""); } catch { } };
+            top.Controls.Add(ol);
+            Timer stt = new Timer(); stt.Interval = 700;
+            stt.Tick += delegate { st.Text = "Status: " + (Hook.Installed ? "hook ACTIVE" : "hook NOT installed (error " + Hook.InstallErr + ")") + (Hook.Enabled ? ", replacing menu: ON" : ", replacing menu: OFF") + "  |  right-clicks seen: " + Hook.Clicks + ", replaced: " + Hook.Replaced + "\nLast right-click: " + Hook.LastInfo + " -> " + Hook.LastDecision; };
+            stt.Start(); this.FormClosed += delegate { stt.Stop(); };
             tabs = new TabControl(); tabs.Dock = DockStyle.Fill; Controls.Add(tabs); Controls.Add(top);
             List<string> cats = new List<string>(); foreach (Prop p in Cfg.All) if (!cats.Contains(p.Cat)) cats.Add(p.Cat);
             foreach (string cat in cats)
@@ -1110,6 +1152,7 @@ namespace MenuStudio
             m.Items.Add("Exit (restores the normal menu)", null, delegate { Exit(); });
             tray.ContextMenuStrip = m;
             tray.MouseClick += delegate (object so, MouseEventArgs me) { if (me.Button == MouseButtons.Left) SettingsForm.ShowIt(); };
+            if (!first) tray.ShowBalloonTip(5000, "Menu Studio active", Hook.Installed ? "Desktop right-click menu is replaced. Shift+right-click = Windows menu." : "Hook NOT installed. Open Settings to see the status.", Hook.Installed ? ToolTipIcon.Info : ToolTipIcon.Warning);
             if (first) { tray.ShowBalloonTip(8000, "Menu Studio is running", "Right-click an empty spot on the desktop. Hold Shift for the normal Windows menu. Click this icon to customize.", ToolTipIcon.Info); SettingsForm.ShowIt(); }
             Application.ApplicationExit += delegate { Hook.Remove(); };
             Application.Run();
