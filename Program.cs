@@ -14,6 +14,24 @@ using Microsoft.Win32;
 
 namespace MenuStudio
 {
+    static class Crash
+    {
+        static readonly string LogDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MenuStudio");
+        public static void Log(object ex)
+        {
+            try { Directory.CreateDirectory(LogDir); string f = Path.Combine(LogDir, "error.log"); try { if (File.Exists(f) && new FileInfo(f).Length > 500000) File.Delete(f); } catch { } File.AppendAllText(f, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + ex + "\r\n\r\n"); } catch { }
+        }
+        public static void Install()
+        {
+            try
+            {
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException += delegate(object s, System.Threading.ThreadExceptionEventArgs e) { Log(e.Exception); };
+                AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e) { Log(e.ExceptionObject); };
+            }
+            catch { }
+        }
+    }
     // ================= Settings =================
     static class Settings
     {
@@ -517,7 +535,7 @@ namespace MenuStudio
             foreach (Entry e in items) { float h = e.Sep ? sg : ih; e.R = new RectangleF(0, y, W, h); y += h; }
             Hh = (int)(y + pad);
             ClientSize = new Size(W + 2 * M, Hh + 2 * M);
-            tm.Interval = 15; tm.Tick += delegate { Step(); };
+            tm.Interval = 15; tm.Tick += delegate { try { Step(); } catch (Exception ex) { Crash.Log(ex); Kill(); } };
             subT.Tick += delegate { subT.Stop(); OpenChild(hover); };
         }
         protected override CreateParams CreateParams
@@ -543,7 +561,7 @@ namespace MenuStudio
                 using (Graphics g = Graphics.FromImage(b)) { g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit; f.Paint(g, 100000); }
                 Pre = f;
             }
-            catch { Pre = null; }
+            catch (Exception ex) { Crash.Log(ex); Pre = null; }
         }
         public static void ShowAt(List<Entry> list, Point pt, MenuForm parent, bool sub)
         {
@@ -580,7 +598,7 @@ namespace MenuStudio
         void Kill()
         {
             tm.Stop(); subT.Stop(); Open.Remove(this); if (Open.Count == 0) Hook.KeysOn(false);
-            try { Hide(); Dispose(); if (bgCache != null) bgCache.Dispose(); } catch { }
+            try { Hide(); Dispose(); if (bgCache != null) { Image bc = bgCache; bgCache = null; bc.Dispose(); } } catch { }
             if (Open.Count == 0) Hook.Post(Prewarm);
         }
 
@@ -858,7 +876,7 @@ namespace MenuStudio
             if (on && kh == IntPtr.Zero) kh = SetWindowsHookEx(13, keyProc, GetModuleHandle(null), 0);
             else if (!on && kh != IntPtr.Zero) { UnhookWindowsHookEx(kh); kh = IntPtr.Zero; swallowedKeys.Clear(); }
         }
-        public static void Post(Action a) { try { sync.BeginInvoke(a); } catch { } }
+        public static void Post(Action a) { try { sync.BeginInvoke(new Action(delegate { try { a(); } catch (Exception ex) { Crash.Log(ex); try { MenuForm.CloseAll(); } catch { } } })); } catch { } }
 
         static string Cls(IntPtr h) { StringBuilder sb = new StringBuilder(64); GetClassName(h, sb, 64); return sb.ToString(); }
         // 0 = not desktop, 1 = empty desktop, 2 = desktop list view (needs icon hit test)
@@ -1072,7 +1090,7 @@ namespace MenuStudio
             bool created;
             System.Threading.Mutex mx = new System.Threading.Mutex(true, "MenuStudio_single_instance", out created);
             if (!created) return;
-            Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+            Crash.Install(); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             Settings.Load();
             bool first = !Settings.GetBool("autostart_init", false);
             if (first) { SetAutostart(true); Settings.Set("autostart_init", true); Settings.Save(); } else if (IsAutostart()) SetAutostart(true);
