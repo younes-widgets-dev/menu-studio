@@ -127,6 +127,28 @@ namespace MenuStudio
         [DllImport("kernel32.dll")] public static extern bool WriteProcessMemory(IntPtr p, IntPtr addr, byte[] buf, int size, out IntPtr w);
         [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr p, IntPtr addr, byte[] buf, int size, out IntPtr r);
         // returns 1 = item under point, 0 = empty, -1 = unknown
+        public static int LastItem = -1;
+        public static string ItemText(IntPtr lv, int idx)
+        {
+            IntPtr proc = IntPtr.Zero, mem = IntPtr.Zero;
+            try
+            {
+                uint pid; GetWindowThreadProcessId(lv, out pid); if (pid == 0) return null;
+                proc = OpenProcess(0x0008 | 0x0010 | 0x0020 | 0x0400, false, pid); if (proc == IntPtr.Zero) return null;
+                mem = VirtualAllocEx(proc, IntPtr.Zero, (UIntPtr)1024, 0x3000, 4); if (mem == IntPtr.Zero) return null;
+                bool x64 = IntPtr.Size == 8; byte[] b = new byte[128];
+                BitConverter.GetBytes(1).CopyTo(b, 0); BitConverter.GetBytes(idx).CopyTo(b, 4);
+                long tp = (long)mem + 256; int po = x64 ? 24 : 20, co = x64 ? 32 : 24;
+                if (x64) BitConverter.GetBytes(tp).CopyTo(b, po); else BitConverter.GetBytes((int)tp).CopyTo(b, po);
+                BitConverter.GetBytes(260).CopyTo(b, co);
+                IntPtr n; if (!WriteProcessMemory(proc, mem, b, b.Length, out n)) return null;
+                SendMessage(lv, 0x1073, (IntPtr)idx, mem);
+                byte[] r = new byte[540]; if (!ReadProcessMemory(proc, (IntPtr)tp, r, r.Length, out n)) return null;
+                string t = Encoding.Unicode.GetString(r); int z = t.IndexOf('\0'); if (z >= 0) t = t.Substring(0, z); return t;
+            }
+            catch { return null; }
+            finally { if (mem != IntPtr.Zero) VirtualFreeEx(proc, mem, UIntPtr.Zero, 0x8000); if (proc != IntPtr.Zero) CloseHandle(proc); }
+        }
         public static int ListHit(IntPtr lv, int sx, int sy)
         {
             IntPtr proc = IntPtr.Zero, mem = IntPtr.Zero;
@@ -140,7 +162,7 @@ namespace MenuStudio
                 IntPtr n; if (!WriteProcessMemory(proc, mem, b, 24, out n)) return -1;
                 SendMessage(lv, 0x1012, (IntPtr)(-1), mem);
                 byte[] r = new byte[24]; if (!ReadProcessMemory(proc, mem, r, 24, out n)) return -1;
-                int item = BitConverter.ToInt32(r, 12);
+                int item = BitConverter.ToInt32(r, 12); LastItem = item;
                 return item >= 0 ? 1 : 0;
             }
             catch { return -1; }
@@ -361,6 +383,7 @@ namespace MenuStudio
             N("Animation", "closedur", "Closing duration (ms)", 120, 20, 800);
 
             Bl("Behavior", "enable", "Replace the desktop right-click menu", true);
+            Bl("Behavior", "shellmenu", "Right-click on a desktop icon: show the real file menu (Open, Send to, Delete, PowerRename...) in the styled menu", true);
             Bl("Behavior", "shiftnative", "Hold Shift while right-clicking to get the normal Windows menu", true);
             Bl("Behavior", "keys", "Keyboard control (arrows, Enter, Esc) while the menu is open", true);
             Bl("Behavior", "flip", "Keep the menu inside the screen", true);
@@ -886,6 +909,158 @@ namespace MenuStudio
         }
     }
 
+    // ================= Real shell context menu for desktop items =================
+    [ComImport, Guid("000214E6-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellFolderX
+    {
+        [PreserveSig] int ParseDisplayName(IntPtr hwnd, IntPtr pbc, [MarshalAs(UnmanagedType.LPWStr)] string name, out uint eaten, out IntPtr pidl, ref uint attr);
+        [PreserveSig] int EnumObjects(IntPtr hwnd, int flags, out IntPtr enm);
+        [PreserveSig] int BindToObject(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int BindToStorage(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int CompareIDs(IntPtr lp, IntPtr p1, IntPtr p2);
+        [PreserveSig] int CreateViewObject(IntPtr hwnd, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int GetAttributesOf(uint cidl, IntPtr apidl, ref uint attr);
+        [PreserveSig] int GetUIObjectOf(IntPtr hwnd, uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref Guid riid, IntPtr rgf, out IntPtr ppv);
+    }
+    [ComImport, Guid("000214E4-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IContextMenuX
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr hmenu, uint idx, uint idFirst, uint idLast, uint flags);
+        [PreserveSig] int InvokeCommand(ref CMINVOKE ici);
+        [PreserveSig] int GetCommandString(UIntPtr id, uint type, IntPtr res, IntPtr name, uint cch);
+    }
+    [ComImport, Guid("000214F4-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IContextMenu2X
+    {
+        [PreserveSig] int QueryContextMenu(IntPtr hmenu, uint idx, uint idFirst, uint idLast, uint flags);
+        [PreserveSig] int InvokeCommand(ref CMINVOKE ici);
+        [PreserveSig] int GetCommandString(UIntPtr id, uint type, IntPtr res, IntPtr name, uint cch);
+        [PreserveSig] int HandleMenuMsg(uint msg, IntPtr w, IntPtr l);
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct CMINVOKE
+    {
+        public uint cbSize, fMask; public IntPtr hwnd, verb, parms, dir; public int nShow; public uint hotkey; public IntPtr hIcon, title, verbW, parmsW, dirW, titleW; public int px, py;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct MII
+    {
+        public uint cbSize, fMask, fType, fState, wID; public IntPtr hSub, hbmC, hbmU; public UIntPtr data; public IntPtr text; public uint cch; public IntPtr hbmItem;
+    }
+    static class ShellMenu
+    {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHParseDisplayName(string name, IntPtr bc, out IntPtr pidl, uint attrIn, out uint attrOut);
+        [DllImport("shell32.dll")] static extern int SHBindToParent(IntPtr pidl, ref Guid riid, out IntPtr ppv, out IntPtr last);
+        [DllImport("ole32.dll")] static extern void CoTaskMemFree(IntPtr p);
+        [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
+        [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr h);
+        [DllImport("user32.dll")] static extern int GetMenuItemCount(IntPtr h);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMenuItemInfo(IntPtr h, uint pos, bool byPos, ref MII mii);
+        static IntPtr hmenu = IntPtr.Zero; static IContextMenuX cm; static IContextMenu2X cm2; static Control owner;
+        static Guid IID_Folder = new Guid("000214E6-0000-0000-C000-000000000046"), IID_CM = new Guid("000214E4-0000-0000-C000-000000000046"), IID_CM2 = new Guid("000214F4-0000-0000-C000-000000000046");
+
+        static string PathFor(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            string n = name.Trim();
+            switch (n.ToLowerInvariant())
+            {
+                case "this pc": return "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+                case "recycle bin": return "::{645FF040-5081-101B-9F08-00AA002F954E}";
+                case "network": return "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
+            }
+            string[] dirs = { Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory) };
+            foreach (string d in dirs)
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(d) || !Directory.Exists(d)) continue;
+                    foreach (string f in Directory.GetFileSystemEntries(d))
+                    {
+                        string fn = Path.GetFileName(f);
+                        if (string.Equals(fn, n, StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetFileNameWithoutExtension(f), n, StringComparison.OrdinalIgnoreCase)) return f;
+                    }
+                }
+                catch { }
+            }
+            return null;
+        }
+        public static void Release()
+        {
+            try { if (cm2 != null) Marshal.ReleaseComObject(cm2); } catch { }
+            try { if (cm != null) Marshal.ReleaseComObject(cm); } catch { }
+            cm = null; cm2 = null; if (hmenu != IntPtr.Zero) { DestroyMenu(hmenu); hmenu = IntPtr.Zero; }
+        }
+        // Builds styled entries from the real shell context menu of the named desktop item. Returns null on any failure.
+        public static List<Entry> Build(string name, Control ctl)
+        {
+            Release(); owner = ctl; IntPtr pidl = IntPtr.Zero;
+            try
+            {
+                string path = PathFor(name); if (path == null) return null;
+                uint attr; if (SHParseDisplayName(path, IntPtr.Zero, out pidl, 0, out attr) != 0 || pidl == IntPtr.Zero) return null;
+                IntPtr pf, last; Guid g = IID_Folder; if (SHBindToParent(pidl, ref g, out pf, out last) != 0 || pf == IntPtr.Zero) return null;
+                IShellFolderX folder = (IShellFolderX)Marshal.GetObjectForIUnknown(pf); Marshal.Release(pf);
+                IntPtr pcm; Guid gc = IID_CM;
+                if (folder.GetUIObjectOf(ctl.Handle, 1, new IntPtr[] { last }, ref gc, IntPtr.Zero, out pcm) != 0 || pcm == IntPtr.Zero) return null;
+                cm = (IContextMenuX)Marshal.GetObjectForIUnknown(pcm);
+                try { Guid g2 = IID_CM2; IntPtr p2; if (Marshal.QueryInterface(pcm, ref g2, out p2) == 0 && p2 != IntPtr.Zero) { cm2 = (IContextMenu2X)Marshal.GetObjectForIUnknown(p2); Marshal.Release(p2); } } catch { }
+                Marshal.Release(pcm);
+                hmenu = CreatePopupMenu();
+                if (cm.QueryContextMenu(hmenu, 0, 1, 0x7FFF, 0) < 0) { Release(); return null; }
+                List<Entry> r = Read(hmenu, 0);
+                while (r.Count > 0 && r[r.Count - 1].Sep) r.RemoveAt(r.Count - 1);
+                while (r.Count > 0 && r[0].Sep) r.RemoveAt(0);
+                if (r.Count == 0) { Release(); return null; }
+                return r;
+            }
+            catch (Exception ex) { Crash.Log(ex); Release(); return null; }
+            finally { if (pidl != IntPtr.Zero) CoTaskMemFree(pidl); }
+        }
+        static List<Entry> Read(IntPtr hm, int depth)
+        {
+            List<Entry> r = new List<Entry>(); int n = GetMenuItemCount(hm); bool lastSep = true;
+            IntPtr buf = Marshal.AllocHGlobal(1024);
+            try
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    MII m = new MII(); m.cbSize = (uint)Marshal.SizeOf(typeof(MII)); m.fMask = 0x1 | 0x2 | 0x4 | 0x40 | 0x100; m.text = buf; m.cch = 500;
+                    Marshal.WriteInt16(buf, 0, 0);
+                    if (!GetMenuItemInfo(hm, (uint)i, true, ref m)) continue;
+                    if ((m.fType & 0x800) != 0) { if (!lastSep) { Entry s = new Entry(); s.Sep = true; r.Add(s); lastSep = true; } continue; }
+                    if ((m.fState & 0x3) != 0) continue; // grayed / disabled
+                    string t = Marshal.PtrToStringUni(buf); if (string.IsNullOrEmpty(t)) continue;
+                    int tab = t.IndexOf('\t'); if (tab >= 0) t = t.Substring(0, tab);
+                    t = t.Replace("&&", "\u0001").Replace("&", "").Replace("\u0001", "&");
+                    Entry e = new Entry(t, null, null);
+                    if (m.hSub != IntPtr.Zero)
+                    {
+                        if (depth >= 2) continue;
+                        try { if (cm2 != null) cm2.HandleMenuMsg(0x117, m.hSub, (IntPtr)i); } catch { }
+                        e.Kids = Read(m.hSub, depth + 1); while (e.Kids.Count > 0 && e.Kids[e.Kids.Count - 1].Sep) e.Kids.RemoveAt(e.Kids.Count - 1);
+                        if (e.Kids.Count == 0) continue;
+                    }
+                    else { uint id = m.wID; e.Act = delegate { Invoke(id); }; }
+                    r.Add(e); lastSep = false;
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+            return r;
+        }
+        static void Invoke(uint id)
+        {
+            try
+            {
+                if (cm == null) return;
+                CMINVOKE c = new CMINVOKE(); c.cbSize = (uint)Marshal.SizeOf(typeof(CMINVOKE)); c.fMask = 0x4000 | 0x20000000; c.hwnd = owner != null ? owner.Handle : IntPtr.Zero;
+                c.verb = (IntPtr)(id - 1); c.verbW = (IntPtr)(id - 1); c.nShow = 1; c.px = Cursor.Position.X; c.py = Cursor.Position.Y;
+                cm.InvokeCommand(ref c);
+            }
+            catch (Exception ex) { Crash.Log(ex); }
+        }
+    }
+
     // ================= Hooks =================
     static class Hook
     {
@@ -987,7 +1162,7 @@ namespace MenuStudio
         {
             try
             {
-                int lh = Native.ListHit(lastLV, pt.x, pt.y); if (lh >= 0) return lh == 1;
+                Native.LastItem = -1; int lh = Native.ListHit(lastLV, pt.x, pt.y); if (lh >= 0) return lh == 1;
                 object acc, child;
                 if (AccessibleObjectFromPoint(pt, out acc, out child) != 0 || acc == null) return false;
                 int cid = 0; try { cid = Convert.ToInt32(child); } catch { return false; }
@@ -1036,7 +1211,17 @@ namespace MenuStudio
                                     swallowUp = true;
                                     System.Threading.ThreadPool.QueueUserWorkItem(delegate
                                     {
-                                        if (OnIcon(pt)) { LastDecision = "on icon: native menu"; Post(Replay); } else Post(delegate { MenuForm.ShowAt(null, pp, null, false); });
+                                        if (OnIcon(pt))
+                                        {
+                                            string nm = Cfg.B("shellmenu") && Native.LastItem >= 0 ? Native.ItemText(lastLV, Native.LastItem) : null;
+                                            Post(delegate
+                                            {
+                                                List<Entry> it = nm != null ? ShellMenu.Build(nm, sync) : null;
+                                                if (it != null) { LastDecision = "styled shell menu for: " + nm; Replaced++; MenuForm.ShowAt(it, pp, null, false); }
+                                                else { LastDecision = "on icon (" + (nm ?? "?") + "): native menu"; Replay(); }
+                                            });
+                                        }
+                                        else Post(delegate { MenuForm.ShowAt(null, pp, null, false); });
                                     });
                                     return (IntPtr)1;
                                 }
