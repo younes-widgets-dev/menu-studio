@@ -458,9 +458,15 @@ namespace MenuStudio
         }
         public static void NativeMenu()
         {
-            Hook.Bypass = true;
-            Native.mouse_event(0x08, 0, 0, 0, UIntPtr.Zero); Native.mouse_event(0x10, 0, 0, 0, UIntPtr.Zero);
-            Hook.Bypass = false;
+            Timer t = new Timer(); t.Interval = 80;
+            t.Tick += delegate
+            {
+                t.Stop(); t.Dispose();
+                Hook.Bypass = true;
+                Native.mouse_event(0x08, 0, 0, 0, UIntPtr.Zero); Native.mouse_event(0x10, 0, 0, 0, UIntPtr.Zero);
+                Hook.Bypass = false;
+            };
+            t.Start();
         }
         static Entry E(string t, string g, Action a) { return new Entry(t, g, a); }
         static Entry Sub(string t, string g, params Entry[] kids) { Entry e = new Entry(t, g, null); e.Kids = new List<Entry>(kids); return e; }
@@ -572,6 +578,17 @@ namespace MenuStudio
 
         public static bool AnyOpen { get { return Open.Count > 0; } }
         public static bool Contains(Point p) { foreach (MenuForm m in Open) if (!m.closing && m.MenuRect.Contains(p)) return true; return false; }
+        public static void CloseNow() { foreach (MenuForm m in new List<MenuForm>(Open)) m.Kill(); }
+        public static void ClickAt(Point p)
+        {
+            for (int k = Open.Count - 1; k >= 0; k--)
+            {
+                MenuForm m = Open[k]; if (m.closing || !m.MenuRect.Contains(p)) continue;
+                int i = m.IndexAt(new Point(p.X - m.Left, p.Y - m.Top));
+                if (i >= 0 && !m.items[i].Sep) m.ActivateIndex(i);
+                return;
+            }
+        }
         public static void CloseAll()
         {
             foreach (MenuForm m in new List<MenuForm>(Open)) m.BeginClose();
@@ -846,7 +863,7 @@ namespace MenuStudio
         {
             Entry en = items[i];
             if (en.Kids != null) { OpenChild(i); return; }
-            Action a = en.Act; CloseAll();
+            Action a = en.Act; CloseNow();
             if (a != null) Hook.Post(a);
         }
         // keyboard from hook
@@ -887,7 +904,7 @@ namespace MenuStudio
 
         static HookProc mouseProc = MouseCb, keyProc = KeyCb; static IntPtr mh = IntPtr.Zero, kh = IntPtr.Zero;
         public static string LastInfo = "(no right-click yet)", LastDecision = ""; public static int Clicks, Replaced; public static int InstallErr; static IntPtr lastLV; public static bool Installed { get { return mh != IntPtr.Zero; } }
-        public static bool shiftNative = true; public static bool Bypass, Enabled = true; static bool swallowUp; static Control sync;
+        public static bool shiftNative = true; public static bool Bypass, Enabled = true; static bool swallowUp, swallowLeft; static Control sync;
         static HashSet<uint> swallowedKeys = new HashSet<uint>();
 
         public static void Install(Control syncCtl)
@@ -991,7 +1008,7 @@ namespace MenuStudio
                 if (n >= 0)
                 {
                     int msg = (int)w;
-                    if (msg != 0x204 && msg != 0x205 && !(MenuForm.AnyOpen && (msg == 0x201 || msg == 0x207))) return CallNextHookEx(mh, n, w, l);
+                    if (msg != 0x204 && msg != 0x205 && !(MenuForm.AnyOpen && (msg == 0x201 || msg == 0x202 || msg == 0x207))) return CallNextHookEx(mh, n, w, l);
                     int mx = Marshal.ReadInt32(l, 0), my = Marshal.ReadInt32(l, 4), flags = Marshal.ReadInt32(l, 12);
                     bool inj = (flags & 1) != 0;
                     if (!inj && !Bypass)
@@ -1000,6 +1017,11 @@ namespace MenuStudio
                         {
                             Point p = new Point(mx, my);
                             if (!MenuForm.Contains(p)) Post(MenuForm.CloseAll);
+                            else if (msg == 0x201) { swallowLeft = true; return (IntPtr)1; }
+                        }
+                        else if (msg == 0x202 && swallowLeft)
+                        {
+                            swallowLeft = false; Point cp = new Point(mx, my); Post(delegate { MenuForm.ClickAt(cp); }); return (IntPtr)1;
                         }
                         if (msg == 0x204 && Enabled && !MenuForm.AnyOpen)
                         {
