@@ -1375,6 +1375,17 @@ namespace MenuStudio
     static class Program
     {
         static NotifyIcon tray; static Control sync;
+        class TrayGuard : NativeWindow
+        {
+            static int msg;
+            [DllImport("user32.dll", CharSet = CharSet.Auto)] static extern int RegisterWindowMessage(string s);
+            public static void Install() { msg = RegisterWindowMessage("TaskbarCreated"); new TrayGuard().CreateHandle(new CreateParams()); }
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == msg && tray != null) { try { tray.Visible = false; tray.Visible = true;  } catch { } }
+                base.WndProc(ref m);
+            }
+        }
         [STAThread]
         static void Main()
         {
@@ -1388,6 +1399,7 @@ namespace MenuStudio
             sync = new Control(); sync.CreateControl(); IntPtr h = sync.Handle;
             Hook.Enabled = Cfg.B("enable"); Hook.shiftNative = Cfg.B("shiftnative"); Hook.Install(sync); MenuForm.Stale = true; Hook.Post(MenuForm.Prewarm);
             tray = new NotifyIcon(); tray.Icon = SystemIcons.Application; tray.Text = "Menu Studio"; tray.Visible = true;
+            try { TrayGuard.Install(); } catch { }
             ContextMenuStrip m = new ContextMenuStrip();
             m.Items.Add("Customize menu...", null, delegate { SettingsForm.ShowIt(); });
             m.Items.Add("Preview menu here", null, delegate { MenuForm.CloseAll(); MenuForm.ShowAt(Spec.Build(), Cursor.Position, null, false); });
