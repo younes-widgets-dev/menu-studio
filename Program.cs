@@ -1036,6 +1036,7 @@ namespace MenuStudio
             Label note = new Label(); note.Text = "Check = show in menu. Custom items run any program or link (for example notepad.exe, or https://...). Built-in items keep their action; you can rename them and change their icon."; note.Left = 8; note.Top = y + 6; note.Width = 540; note.Height = 60; tp.Controls.Add(note);
             EventHandler save = delegate { if (building) return; int i = lst.SelectedIndex; if (i < 0 || i >= specs.Count || specs[i].Kind == "sep") return; specs[i].Label = tLabel.Text; specs[i].Glyph = tGlyph.Text; if (specs[i].Kind == "custom") { specs[i].Cmd = tCmd.Text; specs[i].Args = tArgs.Text; } Spec.Save(specs); };
             tLabel.TextChanged += save; tGlyph.TextChanged += save; tCmd.TextChanged += save; tArgs.TextChanged += save;
+            LoadSel();
             return tp;
         }
         string Disp(Spec s) { return s.Kind == "sep" ? "------ separator ------" : (s.Label + (s.Kind == "custom" ? "   (yours)" : "")); }
@@ -1048,6 +1049,7 @@ namespace MenuStudio
         }
         void LoadSel()
         {
+            if (tLabel == null || tGlyph == null || tCmd == null || tArgs == null) return;
             bool b = building; building = true; int i = lst.SelectedIndex;
             if (i >= 0 && i < specs.Count) { Spec s = specs[i]; tLabel.Text = s.Label; tGlyph.Text = s.Glyph; tCmd.Text = s.Cmd; tArgs.Text = s.Args; tLabel.Enabled = tGlyph.Enabled = s.Kind != "sep"; tCmd.Enabled = tArgs.Enabled = s.Kind == "custom"; }
             building = b;
