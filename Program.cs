@@ -1079,7 +1079,7 @@ namespace MenuStudio
 
         static HookProc mouseProc = MouseCb, keyProc = KeyCb; static IntPtr mh = IntPtr.Zero, kh = IntPtr.Zero;
         public static string LastInfo = "(no right-click yet)", LastDecision = ""; public static int Clicks, Replaced; public static int InstallErr; static IntPtr lastLV; public static bool Installed { get { return mh != IntPtr.Zero; } }
-        public static bool shiftNative = true; public static bool Bypass, Enabled = true; static bool swallowUp, swallowLeft; static Control sync;
+        public static bool TestMode = Environment.GetEnvironmentVariable("MENUSTUDIO_TEST") == "1"; public static bool shiftNative = true; public static bool Bypass, Enabled = true; static bool swallowUp, swallowLeft; static Control sync;
         static HashSet<uint> swallowedKeys = new HashSet<uint>();
 
         public static void Install(Control syncCtl)
@@ -1185,7 +1185,7 @@ namespace MenuStudio
                     int msg = (int)w;
                     if (msg != 0x204 && msg != 0x205 && !(MenuForm.AnyOpen && (msg == 0x201 || msg == 0x202 || msg == 0x207))) return CallNextHookEx(mh, n, w, l);
                     int mx = Marshal.ReadInt32(l, 0), my = Marshal.ReadInt32(l, 4), flags = Marshal.ReadInt32(l, 12);
-                    bool inj = (flags & 1) != 0;
+                    bool inj = (flags & 1) != 0 && !TestMode;
                     if (!inj && !Bypass)
                     {
                         if (MenuForm.AnyOpen && (msg == 0x201 || msg == 0x204 || msg == 0x207))
