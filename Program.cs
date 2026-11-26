@@ -768,7 +768,7 @@ namespace MenuStudio
             if (a != null) Hook.Post(a);
         }
         // keyboard from hook
-        public static MenuForm Top() { for (int i = Open.Count - 1; i >= 0; i--) if (!Open[i].closing) return Open[i]; return null; }
+        public static MenuForm TopMenu() { for (int i = Open.Count - 1; i >= 0; i--) if (!Open[i].closing) return Open[i]; return null; }
         public void Key(int vk)
         {
             if (vk == 27) { if (parent != null) { parent.child = null; BeginClose(); } else CloseAll(); return; }
@@ -885,7 +885,7 @@ namespace MenuStudio
                     bool down = msg == 0x100 || msg == 0x104;
                     if (k.vk == 27 || k.vk == 38 || k.vk == 40 || k.vk == 13 || k.vk == 37 || k.vk == 39)
                     {
-                        if (down) { swallowedKeys.Add(k.vk); uint vk = k.vk; Post(delegate { MenuForm t = MenuForm.Top(); if (t != null) t.Key((int)vk); }); return (IntPtr)1; }
+                        if (down) { swallowedKeys.Add(k.vk); uint vk = k.vk; Post(delegate { MenuForm t = MenuForm.TopMenu(); if (t != null) t.Key((int)vk); }); return (IntPtr)1; }
                         else if (swallowedKeys.Remove(k.vk)) return (IntPtr)1;
                     }
                 }
